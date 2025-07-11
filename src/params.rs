@@ -10,6 +10,9 @@ pub struct PluginParams {
 
     #[id = "timebase"]
     pub timebase: FloatParam,
+
+    #[id = "vertical_scale"]
+    pub vertical_scale: FloatParam,
 }
 
 impl Default for PluginParams {
@@ -26,6 +29,17 @@ impl Default for PluginParams {
             )
             .with_step_size(1.0)
             .with_unit("ms"),
+            vertical_scale: FloatParam::new(
+                "Vertical Scale",
+                1.0,
+                FloatRange::Skewed {
+                    min: 0.5,
+                    max: 10.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_step_size(0.1)
+            .with_unit("x"),
         }
     }
 }

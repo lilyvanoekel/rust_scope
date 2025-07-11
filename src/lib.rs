@@ -139,27 +139,34 @@ impl Plugin for MyPlugin {
                     // @todo: doesn't actually seem to work
                     egui_ctx.set_cursor_icon(egui::CursorIcon::Move);
 
+                    let ui_color = egui::Color32::from_rgb(200, 200, 200);
                     let rect = ui.available_rect_before_wrap();
 
                     // Calculate relative units based on window width, 1 unit is 1%
                     let relative_unit = rect.width() * 0.01;
-                    let padding = relative_unit * 1.5;
+                    let padding = relative_unit * 1.2;
                     let font_size = relative_unit * 2.0;
 
-                    // Label with current value and relative positioning
-                    let label_text = format!("Timebase: {:.1} ms", params.timebase.value());
-                    let label_rect = egui::Rect::from_min_size(
+                    // Draw param labels
+                    ui.painter().text(
                         egui::pos2(rect.left() + padding, rect.top() + padding),
-                        egui::vec2(rect.width() - padding * 2.0, font_size * 1.5),
+                        egui::Align2::LEFT_TOP,
+                        &format!("Timebase: {:.1} ms", params.timebase.value()),
+                        egui::FontId::proportional(font_size),
+                        ui_color,
                     );
                     ui.painter().text(
-                        label_rect.min,
+                        egui::pos2(
+                            rect.left() + padding,
+                            rect.top() + padding + font_size * 1.6,
+                        ),
                         egui::Align2::LEFT_TOP,
-                        &label_text,
+                        &format!("Scale: {:.1}x", params.vertical_scale.value()),
                         egui::FontId::proportional(font_size),
-                        egui::Color32::WHITE,
+                        ui_color,
                     );
 
+                    // Draw oscilloscope
                     let current_buffer_size = buffer_size.load(Ordering::Relaxed);
                     let current_write_pos = write_pos.load(Ordering::Relaxed);
                     let current_sample_rate = sample_rate.load(Ordering::Relaxed) as f32;
@@ -174,6 +181,7 @@ impl Plugin for MyPlugin {
                         let samples_to_display = samples_to_display.min(current_buffer_size);
 
                         // Calculate the points we want to draw
+                        let vertical_scale = params.vertical_scale.value();
                         let points: Vec<egui::Pos2> = (0..display_width)
                             .map(|i| {
                                 // Map screen position to buffer position, using timebase
@@ -182,7 +190,8 @@ impl Plugin for MyPlugin {
                                     % current_buffer_size;
                                 let sample = buffer[buffer_index].load(Ordering::Relaxed);
                                 let x = rect.left() + i as f32;
-                                let y = rect.center().y - sample * rect.height() * 0.4;
+                                let y =
+                                    rect.center().y - sample * rect.height() * 0.4 * vertical_scale;
                                 egui::pos2(x, y)
                             })
                             .collect();
@@ -193,10 +202,10 @@ impl Plugin for MyPlugin {
                                 egui::pos2(rect.left(), rect.center().y),
                                 egui::pos2(rect.right(), rect.center().y),
                             ],
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)),
+                            egui::Stroke::new(1.0, ui_color),
                         ));
 
-                        // Draw oscilloscope
+                        // Draw oscilloscope lines themselves
                         ui.painter().add(egui::Shape::line(
                             points,
                             egui::Stroke::new(1.0, egui::Color32::LIGHT_GREEN),
@@ -208,26 +217,49 @@ impl Plugin for MyPlugin {
                             if ui.input(|i| i.pointer.primary_down()) {
                                 // Check if this is the start of a drag
                                 if ui.input(|i| i.pointer.primary_pressed()) {
-                                    // Store initial position and value when drag starts
+                                    // Store initial position and values when drag starts
                                     ui.memory_mut(|mem| {
                                         mem.data.insert_temp(
                                             ui.id().with("drag_start"),
-                                            (pointer_pos.x, params.timebase.value()),
+                                            (
+                                                pointer_pos.x,
+                                                pointer_pos.y,
+                                                params.timebase.value(),
+                                                params.vertical_scale.value(),
+                                            ),
                                         )
                                     });
                                 } else {
                                     // We're in the middle of a drag - calculate relative movement
-                                    if let Some((start_x, start_value)) = ui.memory(|mem| {
-                                        mem.data.get_temp::<(f32, f32)>(ui.id().with("drag_start"))
-                                    }) {
-                                        let movement = pointer_pos.x - start_x;
+                                    if let Some((start_x, start_y, start_timebase, start_scale)) =
+                                        ui.memory(|mem| {
+                                            mem.data.get_temp::<(f32, f32, f32, f32)>(
+                                                ui.id().with("drag_start"),
+                                            )
+                                        })
+                                    {
+                                        let horizontal_movement = pointer_pos.x - start_x;
+                                        let vertical_movement = start_y - pointer_pos.y; // Inverted: up = more scale
+
+                                        // Horizontal drag controls timebase
                                         let window_width = rect.width();
-                                        let sensitivity = 2.0;
-                                        let value_delta =
-                                            (movement / window_width) * 99.0 * sensitivity;
-                                        let new_value =
-                                            (start_value + value_delta).clamp(1.0, 100.0);
-                                        setter.set_parameter(&params.timebase, new_value);
+                                        let timebase_sensitivity = 2.0;
+                                        let timebase_delta = (horizontal_movement / window_width)
+                                            * 99.0
+                                            * timebase_sensitivity;
+                                        let new_timebase =
+                                            (start_timebase + timebase_delta).clamp(1.0, 100.0);
+                                        setter.set_parameter(&params.timebase, new_timebase);
+
+                                        // Vertical drag controls scale
+                                        let window_height = rect.height();
+                                        let scale_sensitivity = 1.0;
+                                        let scale_delta = (vertical_movement / window_height)
+                                            * 9.5
+                                            * scale_sensitivity;
+                                        let new_scale =
+                                            (start_scale + scale_delta).clamp(0.5, 10.0);
+                                        setter.set_parameter(&params.vertical_scale, new_scale);
                                     }
                                 }
                             }
