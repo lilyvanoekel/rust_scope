@@ -124,30 +124,61 @@ impl Plugin for MyPlugin {
     fn deactivate(&mut self) {}
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let params = self.params.clone();
         let buffer = self.buffer.clone();
         let write_pos = self.write_pos.clone();
         let buffer_size = self.buffer_size.clone();
+        let sample_rate = self.sample_rate.clone();
         let egui_state = self.params.editor_state.clone();
         create_egui_editor(
             self.params.editor_state.clone(),
             (),
             |_, _| {},
-            move |egui_ctx, _setter, _state| {
+            move |egui_ctx, setter, _state| {
                 ResizableWindow::new("Oscilloscope").show(egui_ctx, egui_state.as_ref(), |ui| {
+                    // @todo: doesn't actually seem to work
+                    egui_ctx.set_cursor_icon(egui::CursorIcon::Move);
+
                     let rect = ui.available_rect_before_wrap();
+
+                    // Calculate relative units based on window width, 1 unit is 1%
+                    let relative_unit = rect.width() * 0.01;
+                    let padding = relative_unit * 1.5;
+                    let font_size = relative_unit * 2.0;
+
+                    // Label with current value and relative positioning
+                    let label_text = format!("Timebase: {:.1} ms", params.timebase.value());
+                    let label_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + padding, rect.top() + padding),
+                        egui::vec2(rect.width() - padding * 2.0, font_size * 1.5),
+                    );
+                    ui.painter().text(
+                        label_rect.min,
+                        egui::Align2::LEFT_TOP,
+                        &label_text,
+                        egui::FontId::proportional(font_size),
+                        egui::Color32::WHITE,
+                    );
 
                     let current_buffer_size = buffer_size.load(Ordering::Relaxed);
                     let current_write_pos = write_pos.load(Ordering::Relaxed);
+                    let current_sample_rate = sample_rate.load(Ordering::Relaxed) as f32;
 
                     if current_buffer_size > 1 {
                         let display_width = rect.width() as usize;
+                        let timebase_ms = params.timebase.value();
+
+                        // Calculate how many samples to display based on timebase
+                        let samples_to_display =
+                            (current_sample_rate * timebase_ms / 1000.0) as usize;
+                        let samples_to_display = samples_to_display.min(current_buffer_size);
 
                         // Calculate the points we want to draw
                         let points: Vec<egui::Pos2> = (0..display_width)
                             .map(|i| {
-                                // Map screen position to buffer position
+                                // Map screen position to buffer position, using timebase
                                 let buffer_index = (current_write_pos
-                                    + (i * current_buffer_size / display_width))
+                                    + (i * samples_to_display / display_width))
                                     % current_buffer_size;
                                 let sample = buffer[buffer_index].load(Ordering::Relaxed);
                                 let x = rect.left() + i as f32;
@@ -170,6 +201,37 @@ impl Plugin for MyPlugin {
                             points,
                             egui::Stroke::new(1.0, egui::Color32::LIGHT_GREEN),
                         ));
+                    }
+
+                    if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                        if rect.contains(pointer_pos) {
+                            if ui.input(|i| i.pointer.primary_down()) {
+                                // Check if this is the start of a drag
+                                if ui.input(|i| i.pointer.primary_pressed()) {
+                                    // Store initial position and value when drag starts
+                                    ui.memory_mut(|mem| {
+                                        mem.data.insert_temp(
+                                            ui.id().with("drag_start"),
+                                            (pointer_pos.x, params.timebase.value()),
+                                        )
+                                    });
+                                } else {
+                                    // We're in the middle of a drag - calculate relative movement
+                                    if let Some((start_x, start_value)) = ui.memory(|mem| {
+                                        mem.data.get_temp::<(f32, f32)>(ui.id().with("drag_start"))
+                                    }) {
+                                        let movement = pointer_pos.x - start_x;
+                                        let window_width = rect.width();
+                                        let sensitivity = 2.0;
+                                        let value_delta =
+                                            (movement / window_width) * 99.0 * sensitivity;
+                                        let new_value =
+                                            (start_value + value_delta).clamp(1.0, 100.0);
+                                        setter.set_parameter(&params.timebase, new_value);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     ui.allocate_rect(rect, egui::Sense::hover());

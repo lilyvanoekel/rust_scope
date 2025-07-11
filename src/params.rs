@@ -8,23 +8,24 @@ pub struct PluginParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<EguiState>,
 
-    #[id = "scale"]
-    pub scale: FloatParam,
+    #[id = "timebase"]
+    pub timebase: FloatParam,
 }
 
 impl Default for PluginParams {
     fn default() -> Self {
         Self {
             editor_state: EguiState::from_size(600, 400),
-            scale: FloatParam::new(
-                "Scale",
-                0.0,
+            timebase: FloatParam::new(
+                "Timebase",
+                10.0,
                 FloatRange::Linear {
-                    min: -0.0,
-                    max: 1.0,
+                    min: 1.0,
+                    max: 100.0,
                 },
             )
-            .with_step_size(0.01),
+            .with_step_size(1.0)
+            .with_unit("ms"),
         }
     }
 }
