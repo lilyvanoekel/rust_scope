@@ -1,8 +1,12 @@
 use nih_plug::params::smoothing::AtomicF32;
-use nih_plug_egui::egui::{self, Response, Sense, Widget};
+use nih_plug_egui::egui::{self, Rect, Response, Sense, Widget};
 use std::sync::atomic::Ordering;
 
 use crate::drag_control::DragControllable;
+
+// Color for UI elements (centre line, text)
+const UI_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 200, 200);
+const SCOPE_COLOR: egui::Color32 = egui::Color32::LIGHT_GREEN;
 
 pub struct OscilloscopeWidget<'a> {
     timebase: f32,
@@ -45,6 +49,76 @@ impl<'a> OscilloscopeWidget<'a> {
         self.on_scale_change = Some(Box::new(callback));
         self
     }
+
+    fn draw_labels(&self, ui: &mut egui::Ui, rect: &Rect) {
+        // Relative unit system based on width, something more sophisticated is probably warranted
+        // This works ok when a single full size instance of the widget is used, but less so in a UI composed of multiple widgets
+        let relative_unit = rect.width() * 0.01;
+        let padding = relative_unit * 1.2;
+        let font_size = relative_unit * 2.0;
+
+        // Draw param labels
+        ui.painter().text(
+            egui::pos2(rect.left() + padding, rect.top() + padding),
+            egui::Align2::LEFT_TOP,
+            &format!("Timebase: {:.1} ms", self.timebase),
+            egui::FontId::proportional(font_size),
+            UI_COLOR,
+        );
+        ui.painter().text(
+            egui::pos2(
+                rect.left() + padding,
+                rect.top() + padding + font_size * 1.6,
+            ),
+            egui::Align2::LEFT_TOP,
+            &format!("Scale: {:.1}x", self.vertical_scale),
+            egui::FontId::proportional(font_size),
+            UI_COLOR,
+        );
+    }
+
+    fn calculate_points(&self, rect: &Rect) -> Vec<egui::Pos2> {
+        let display_width = rect.width() as usize;
+
+        // Calculate how many samples to display based on timebase
+        let samples_to_display = (self.current_sample_rate * self.timebase / 1000.0) as usize;
+        let samples_to_display = samples_to_display.min(self.current_buffer_size);
+
+        (0..display_width)
+            .map(|i| {
+                // Map screen position to buffer position, using timebase
+                let buffer_index = (self.current_write_pos
+                    + (i * samples_to_display / display_width))
+                    % self.current_buffer_size;
+
+                let sample = self.buffer[buffer_index].load(Ordering::Relaxed);
+                let x = rect.left() + i as f32;
+                let y = rect.center().y - sample * rect.height() * 0.4 * self.vertical_scale;
+                egui::pos2(x, y)
+            })
+            .collect()
+    }
+
+    fn draw_scope(&self, ui: &mut egui::Ui, rect: &Rect) {
+        if self.current_buffer_size > 1 {
+            // Draw middle line
+            ui.painter().add(egui::Shape::line(
+                vec![
+                    egui::pos2(rect.left(), rect.center().y),
+                    egui::pos2(rect.right(), rect.center().y),
+                ],
+                egui::Stroke::new(1.0, UI_COLOR),
+            ));
+
+            let points = self.calculate_points(&rect);
+
+            // Draw oscilloscope lines themselves
+            ui.painter().add(egui::Shape::line(
+                points,
+                egui::Stroke::new(1.0, SCOPE_COLOR),
+            ));
+        }
+    }
 }
 
 impl<'a> DragControllable for OscilloscopeWidget<'a> {
@@ -76,73 +150,8 @@ impl<'a> Widget for OscilloscopeWidget<'a> {
         // Attempt to set cursor, shows intent but doesn't actually work at this point (@todo)
         ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
 
-        // Color for UI elements (centre line, text)
-        let ui_color = egui::Color32::from_rgb(200, 200, 200);
-        let scope_color = egui::Color32::LIGHT_GREEN;
-
-        // Relative unit system based on width, something more sophisticated is probably warranted
-        // This works ok when a single full size instance of the widget is used, but less so in a UI composed of multiple widgets
-        let relative_unit = rect.width() * 0.01;
-        let padding = relative_unit * 1.2;
-        let font_size = relative_unit * 2.0;
-
-        // Draw param labels
-        ui.painter().text(
-            egui::pos2(rect.left() + padding, rect.top() + padding),
-            egui::Align2::LEFT_TOP,
-            &format!("Timebase: {:.1} ms", self.timebase),
-            egui::FontId::proportional(font_size),
-            ui_color,
-        );
-        ui.painter().text(
-            egui::pos2(
-                rect.left() + padding,
-                rect.top() + padding + font_size * 1.6,
-            ),
-            egui::Align2::LEFT_TOP,
-            &format!("Scale: {:.1}x", self.vertical_scale),
-            egui::FontId::proportional(font_size),
-            ui_color,
-        );
-
-        // Draw oscilloscope
-        if self.current_buffer_size > 1 {
-            let display_width = rect.width() as usize;
-
-            // Calculate how many samples to display based on timebase
-            let samples_to_display = (self.current_sample_rate * self.timebase / 1000.0) as usize;
-            let samples_to_display = samples_to_display.min(self.current_buffer_size);
-
-            // Calculate the points we want to draw
-            let points: Vec<egui::Pos2> = (0..display_width)
-                .map(|i| {
-                    // Map screen position to buffer position, using timebase
-                    let buffer_index = (self.current_write_pos
-                        + (i * samples_to_display / display_width))
-                        % self.current_buffer_size;
-
-                    let sample = self.buffer[buffer_index].load(Ordering::Relaxed);
-                    let x = rect.left() + i as f32;
-                    let y = rect.center().y - sample * rect.height() * 0.4 * self.vertical_scale;
-                    egui::pos2(x, y)
-                })
-                .collect();
-
-            // Draw middle line
-            ui.painter().add(egui::Shape::line(
-                vec![
-                    egui::pos2(rect.left(), rect.center().y),
-                    egui::pos2(rect.right(), rect.center().y),
-                ],
-                egui::Stroke::new(1.0, ui_color),
-            ));
-
-            // Draw oscilloscope lines themselves
-            ui.painter().add(egui::Shape::line(
-                points,
-                egui::Stroke::new(1.0, scope_color),
-            ));
-        }
+        self.draw_labels(ui, &rect);
+        self.draw_scope(ui, &rect);
 
         // Handle drag control to update params on drag
         self.handle_drag_control(ui, &rect);
