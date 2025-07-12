@@ -2,6 +2,8 @@ use nih_plug::params::smoothing::AtomicF32;
 use nih_plug_egui::egui::{self, Response, Sense, Widget};
 use std::sync::atomic::Ordering;
 
+use crate::drag_control::DragControllable;
+
 pub struct OscilloscopeWidget<'a> {
     timebase: f32,
     vertical_scale: f32,
@@ -45,8 +47,28 @@ impl<'a> OscilloscopeWidget<'a> {
     }
 }
 
+impl<'a> DragControllable for OscilloscopeWidget<'a> {
+    fn on_drag(&mut self, normalized_x: f32, normalized_y: f32) {
+        let new_timebase = 1.0 + normalized_x * 99.0;
+        let new_scale = 0.5 + normalized_y * 9.5;
+        if let Some(ref mut callback) = self.on_timebase_change {
+            callback(new_timebase);
+        }
+        if let Some(ref mut callback) = self.on_scale_change {
+            callback(new_scale);
+        }
+    }
+
+    fn initial_drag_position(&self) -> (f32, f32) {
+        (
+            (self.timebase - 1.0) / 99.0,
+            (self.vertical_scale - 0.5) / 9.5,
+        )
+    }
+}
+
 impl<'a> Widget for OscilloscopeWidget<'a> {
-    fn ui(self, ui: &mut egui::Ui) -> Response {
+    fn ui(mut self, ui: &mut egui::Ui) -> Response {
         // Take up all space available
         let desired_size = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::drag());
@@ -122,58 +144,8 @@ impl<'a> Widget for OscilloscopeWidget<'a> {
             ));
         }
 
-        if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
-            if rect.contains(pointer_pos) {
-                if ui.input(|i| i.pointer.primary_down()) {
-                    // Check if this is the start of a drag
-                    if ui.input(|i| i.pointer.primary_pressed()) {
-                        // Store initial position and values when drag starts
-                        ui.memory_mut(|mem| {
-                            mem.data.insert_temp(
-                                ui.id().with("drag_start"),
-                                (
-                                    pointer_pos.x,
-                                    pointer_pos.y,
-                                    self.timebase,
-                                    self.vertical_scale,
-                                ),
-                            )
-                        });
-                    } else {
-                        // We're in the middle of a drag, calculate relative movement
-                        if let Some((start_x, start_y, start_timebase, start_scale)) =
-                            ui.memory(|mem| {
-                                mem.data
-                                    .get_temp::<(f32, f32, f32, f32)>(ui.id().with("drag_start"))
-                            })
-                        {
-                            let horizontal_movement = pointer_pos.x - start_x;
-                            let vertical_movement = start_y - pointer_pos.y; // up = more scale
-
-                            // Horizontal drag controls timebase
-                            let window_width = rect.width();
-                            let timebase_sensitivity = 2.0;
-                            let timebase_delta =
-                                (horizontal_movement / window_width) * 99.0 * timebase_sensitivity;
-                            let new_timebase = (start_timebase + timebase_delta).clamp(1.0, 100.0);
-                            if let Some(ref callback) = self.on_timebase_change {
-                                callback(new_timebase);
-                            }
-
-                            // Vertical drag controls scale
-                            let window_height = rect.height();
-                            let scale_sensitivity = 1.0;
-                            let scale_delta =
-                                (vertical_movement / window_height) * 9.5 * scale_sensitivity;
-                            let new_scale = (start_scale + scale_delta).clamp(0.5, 10.0);
-                            if let Some(ref callback) = self.on_scale_change {
-                                callback(new_scale);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Handle drag control to update params on drag
+        self.handle_drag_control(ui, &rect);
 
         response
     }

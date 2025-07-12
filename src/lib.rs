@@ -4,6 +4,7 @@ use nih_plug_egui::{create_egui_editor, resizable_window::ResizableWindow};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
+mod drag_control;
 mod oscilloscope;
 mod params;
 
