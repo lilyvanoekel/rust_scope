@@ -112,7 +112,20 @@ impl<'a> OscilloscopeWidget<'a> {
 
             let points = self.calculate_points(&rect);
 
-            // Draw oscilloscope lines themselves
+            // Draw oscilloscope lines with glow effect
+            let glow_layers = 2;
+            for layer in (0..glow_layers).rev() {
+                let opacity = 0.3 / (layer + 1) as f32;
+                let stroke_width = (layer * 2 + 1) as f32;
+                let glow_color = SCOPE_COLOR.linear_multiply(opacity);
+
+                ui.painter().add(egui::Shape::line(
+                    points.clone(),
+                    egui::Stroke::new(stroke_width, glow_color),
+                ));
+            }
+
+            // Draw the main line on top
             ui.painter().add(egui::Shape::line(
                 points,
                 egui::Stroke::new(1.0, SCOPE_COLOR),
