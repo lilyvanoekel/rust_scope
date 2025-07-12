@@ -1,17 +1,13 @@
 use nih_plug::params::smoothing::AtomicF32;
 use nih_plug::prelude::*;
-use nih_plug_egui::{
-    create_egui_editor,
-    egui::{self},
-    resizable_window::ResizableWindow,
-};
+use nih_plug_egui::{create_egui_editor, resizable_window::ResizableWindow};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 mod oscilloscope;
 mod params;
 
-use oscilloscope::oscilloscope;
+use oscilloscope::OscilloscopeWidget;
 use params::PluginParams;
 
 // Maximum supported sample rate (192k)
@@ -138,29 +134,26 @@ impl Plugin for MyPlugin {
             |_, _| {},
             move |egui_ctx, setter, _state| {
                 ResizableWindow::new("Oscilloscope").show(egui_ctx, egui_state.as_ref(), |ui| {
-                    // @todo: doesn't actually seem to work
-                    egui_ctx.set_cursor_icon(egui::CursorIcon::Move);
-
-                    let rect = ui.available_rect_before_wrap();
-
                     let current_buffer_size = buffer_size.load(Ordering::Relaxed);
                     let current_write_pos = write_pos.load(Ordering::Relaxed);
                     let current_sample_rate = sample_rate.load(Ordering::Relaxed) as f32;
 
-                    oscilloscope(
-                        ui,
-                        &rect,
+                    let scope_widget = OscilloscopeWidget::new(
                         params.timebase.value(),
                         params.vertical_scale.value(),
                         current_buffer_size,
                         current_write_pos,
                         current_sample_rate,
                         &buffer[..current_buffer_size],
-                        |new_timebase| setter.set_parameter(&params.timebase, new_timebase),
-                        |new_scale| setter.set_parameter(&params.vertical_scale, new_scale),
-                    );
+                    )
+                    .on_timebase_change(|new_timebase| {
+                        setter.set_parameter(&params.timebase, new_timebase)
+                    })
+                    .on_scale_change(|new_scale| {
+                        setter.set_parameter(&params.vertical_scale, new_scale)
+                    });
 
-                    ui.allocate_rect(rect, egui::Sense::hover());
+                    ui.add(scope_widget);
                 });
             },
         )
